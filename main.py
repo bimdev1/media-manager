@@ -19,7 +19,7 @@ import click
 from src.config import settings
 from src.smb_client import SMBClient, UndoLog
 from src.metadata import extract_metadata
-from src.naming import generate_folder_name, generate_track_filename, analyze_current_name
+from src.naming import generate_folder_name, generate_track_filename, analyze_current_name, calculate_renames, execute_renames
 from src.artwork import ArtworkFetcher, should_replace_cover
 from src.lyrics import LyricsFetcher, format_lrc_content
 
@@ -269,6 +269,18 @@ def fix(ctx: click.Context, component: str, limit: int) -> None:
                     stats["errors"] += 1
                     continue
 
+                # Fix naming
+                if component in ("naming", "all"):
+                    rename_actions = calculate_renames(album_path, album_tracks, meta)
+                    if rename_actions:
+                        success, errors = execute_renames(client, undo_log, rename_actions, dry_run)
+                        stats["renames"] += success
+                        stats["errors"] += errors
+                        # Update album_path if folder was renamed
+                        for action in rename_actions:
+                            if action.action_type == "album_folder" and not dry_run:
+                                album_path = action.dst
+
                 # Fix artwork
                 if component in ("artwork", "all") and artwork_fetcher:
                     should_replace, reason = should_replace_cover(cover_data)
@@ -421,6 +433,16 @@ def watch(ctx: click.Context, interval: int, component: str) -> None:
 
             if not meta:
                 continue
+
+            # Process naming
+            if component in ("naming", "all"):
+                rename_actions = calculate_renames(album_path, album_tracks, meta)
+                if rename_actions:
+                    success, errors = execute_renames(client, undo_log, rename_actions, dry_run)
+                    # Update album_path if folder was renamed
+                    for action in rename_actions:
+                        if action.action_type == "album_folder" and not dry_run:
+                            album_path = action.dst
 
             # Process artwork
             if component in ("artwork", "all") and artwork_fetcher:

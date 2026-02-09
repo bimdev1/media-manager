@@ -230,3 +230,144 @@ def detect_naming_issues(current_filename: str) -> list[str]:
         issues.append("Contains release group tag")
 
     return issues
+
+
+@dataclass
+class RenameAction:
+    """A pending rename operation."""
+
+    src: str
+    dst: str
+    action_type: str  # "file", "album_folder", "artist_folder"
+    description: str
+
+
+def calculate_renames(
+    album_path: str,
+    tracks: list["FileInfo"],  # from smb_client
+    meta: "TrackMetadata",
+) -> list[RenameAction]:
+    """
+    Calculate all rename operations needed for an album.
+
+    Args:
+        album_path: Current path to album folder
+        tracks: List of FileInfo for tracks in the album
+        meta: Metadata from first track (for album-level info)
+
+    Returns:
+        List of RenameAction operations to perform
+    """
+    from .metadata import extract_metadata
+
+    actions: list[RenameAction] = []
+
+    # Parse current structure
+    path_parts = album_path.replace("\\", "/").rstrip("/").split("/")
+    if len(path_parts) < 2:
+        return actions
+
+    current_album_folder = path_parts[-1]
+    current_artist_folder = path_parts[-2]
+    parent_path = "/".join(path_parts[:-1]).replace("/", "\\")
+
+    # Generate ideal names
+    ideal_folder = generate_folder_name(meta)
+    ideal_parts = ideal_folder.split("/")
+    ideal_artist = ideal_parts[0]
+    ideal_album = ideal_parts[1] if len(ideal_parts) > 1 else ideal_parts[0]
+
+    # Check if album folder needs renaming
+    if current_album_folder != ideal_album:
+        new_album_path = f"{parent_path}\\{ideal_album}"
+        actions.append(RenameAction(
+            src=album_path,
+            dst=new_album_path,
+            action_type="album_folder",
+            description=f"Rename album: '{current_album_folder}' → '{ideal_album}'",
+        ))
+        # Update album_path for file renames
+        album_path = new_album_path
+
+    # Check each track file
+    for track_info in tracks:
+        # Get metadata for this specific track
+        ideal_filename = generate_track_filename(meta)
+
+        # For accurate filename, we need per-track metadata
+        # but we'll use the track position from current filename if available
+        current_name = track_info.name
+        if current_name != ideal_filename:
+            # Only rename if significantly different (not just minor variations)
+            src = track_info.path
+            # Update path if album was renamed
+            if actions and actions[0].action_type == "album_folder":
+                src = f"{actions[0].dst}\\{current_name}"
+            dst = f"{album_path}\\{ideal_filename}"
+
+            actions.append(RenameAction(
+                src=src,
+                dst=dst,
+                action_type="file",
+                description=f"Rename: '{current_name}' → '{ideal_filename}'",
+            ))
+
+    return actions
+
+
+def execute_renames(
+    client: "SMBClient",
+    undo_log: "UndoLog",
+    actions: list[RenameAction],
+    dry_run: bool = False,
+) -> tuple[int, int]:
+    """
+    Execute rename operations.
+
+    Args:
+        client: SMB client
+        undo_log: Undo log for rollback
+        actions: List of rename actions
+        dry_run: If True, don't actually rename
+
+    Returns:
+        (success_count, error_count)
+    """
+    import logging
+
+    logger = logging.getLogger(__name__)
+    success = 0
+    errors = 0
+
+    # Sort actions: folders first (so file paths are valid after folder rename)
+    folder_actions = [a for a in actions if a.action_type in ("album_folder", "artist_folder")]
+    file_actions = [a for a in actions if a.action_type == "file"]
+
+    for action in folder_actions + file_actions:
+        try:
+            if not dry_run:
+                # Check if source exists
+                if not client.exists(action.src):
+                    logger.warning(f"Source not found: {action.src}")
+                    errors += 1
+                    continue
+
+                # Check if destination already exists
+                if client.exists(action.dst):
+                    logger.warning(f"Destination exists: {action.dst}")
+                    errors += 1
+                    continue
+
+                # Perform rename
+                client.rename(action.src, action.dst)
+                undo_log.log_rename(action.src, action.dst)
+
+            logger.info(f"  [RENAME] {action.description}")
+            success += 1
+
+        except OSError as e:
+            logger.error(f"  [ERROR] {action.description}: {e}")
+            errors += 1
+
+    return success, errors
+
