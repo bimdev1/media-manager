@@ -271,7 +271,18 @@ def fix(ctx: click.Context, component: str, limit: int) -> None:
 
                 # Fix naming
                 if component in ("naming", "all"):
-                    rename_actions = calculate_renames(album_path, album_tracks, meta)
+                    # Build per-track metadata dict
+                    track_metadata: dict[str, "TrackMetadata"] = {}
+                    for track in album_tracks:
+                        try:
+                            track_audio = client.read_file(track.path)
+                            track_meta = extract_metadata(track_audio, track.path)
+                            if track_meta:
+                                track_metadata[track.path] = track_meta
+                        except OSError:
+                            continue
+
+                    rename_actions = calculate_renames(album_path, album_tracks, meta, track_metadata)
                     if rename_actions:
                         success, errors = execute_renames(client, undo_log, rename_actions, dry_run)
                         stats["renames"] += success
@@ -436,7 +447,18 @@ def watch(ctx: click.Context, interval: int, component: str) -> None:
 
             # Process naming
             if component in ("naming", "all"):
-                rename_actions = calculate_renames(album_path, album_tracks, meta)
+                # Build per-track metadata dict
+                track_metadata: dict[str, "TrackMetadata"] = {}
+                for track in album_tracks:
+                    try:
+                        track_audio = client.read_file(track.path)
+                        track_meta = extract_metadata(track_audio, track.path)
+                        if track_meta:
+                            track_metadata[track.path] = track_meta
+                    except OSError:
+                        continue
+
+                rename_actions = calculate_renames(album_path, album_tracks, meta, track_metadata)
                 if rename_actions:
                     success, errors = execute_renames(client, undo_log, rename_actions, dry_run)
                     # Update album_path if folder was renamed

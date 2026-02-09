@@ -245,7 +245,8 @@ class RenameAction:
 def calculate_renames(
     album_path: str,
     tracks: list["FileInfo"],  # from smb_client
-    meta: "TrackMetadata",
+    album_meta: "TrackMetadata",
+    track_metadata: dict[str, "TrackMetadata"] | None = None,
 ) -> list[RenameAction]:
     """
     Calculate all rename operations needed for an album.
@@ -253,13 +254,12 @@ def calculate_renames(
     Args:
         album_path: Current path to album folder
         tracks: List of FileInfo for tracks in the album
-        meta: Metadata from first track (for album-level info)
+        album_meta: Metadata from first track (for album-level info like artist, album name)
+        track_metadata: Optional dict mapping track path to its metadata for per-track renaming
 
     Returns:
         List of RenameAction operations to perform
     """
-    from .metadata import extract_metadata
-
     actions: list[RenameAction] = []
 
     # Parse current structure
@@ -268,14 +268,16 @@ def calculate_renames(
         return actions
 
     current_album_folder = path_parts[-1]
-    current_artist_folder = path_parts[-2]
     parent_path = "/".join(path_parts[:-1]).replace("/", "\\")
 
-    # Generate ideal names
-    ideal_folder = generate_folder_name(meta)
+    # Generate ideal album folder name
+    ideal_folder = generate_folder_name(album_meta)
     ideal_parts = ideal_folder.split("/")
-    ideal_artist = ideal_parts[0]
     ideal_album = ideal_parts[1] if len(ideal_parts) > 1 else ideal_parts[0]
+
+    # Track whether album folder will be renamed
+    album_renamed = False
+    new_album_path = album_path
 
     # Check if album folder needs renaming
     if current_album_folder != ideal_album:
@@ -286,24 +288,34 @@ def calculate_renames(
             action_type="album_folder",
             description=f"Rename album: '{current_album_folder}' → '{ideal_album}'",
         ))
-        # Update album_path for file renames
-        album_path = new_album_path
+        album_renamed = True
 
-    # Check each track file
-    for track_info in tracks:
-        # Get metadata for this specific track
-        ideal_filename = generate_track_filename(meta)
+    # Only rename files if we have per-track metadata
+    if track_metadata:
+        for track_info in tracks:
+            # Get this track's specific metadata
+            track_meta = track_metadata.get(track_info.path)
+            if not track_meta:
+                continue
 
-        # For accurate filename, we need per-track metadata
-        # but we'll use the track position from current filename if available
-        current_name = track_info.name
-        if current_name != ideal_filename:
-            # Only rename if significantly different (not just minor variations)
-            src = track_info.path
-            # Update path if album was renamed
-            if actions and actions[0].action_type == "album_folder":
-                src = f"{actions[0].dst}\\{current_name}"
-            dst = f"{album_path}\\{ideal_filename}"
+            # Generate ideal filename for this specific track
+            ideal_filename = generate_track_filename(track_meta)
+            current_name = track_info.name
+
+            # Skip if already correct
+            if current_name == ideal_filename:
+                continue
+
+            # Build source and destination paths
+            if album_renamed:
+                src = f"{new_album_path}\\{current_name}"
+            else:
+                src = track_info.path
+            dst = f"{new_album_path}\\{ideal_filename}"
+
+            # Skip if source and destination are the same
+            if src == dst:
+                continue
 
             actions.append(RenameAction(
                 src=src,
