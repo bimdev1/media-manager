@@ -1,0 +1,22 @@
+[Unit]
+Description=Media Manager - Music Library Watcher
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tim
+Group=tim
+WorkingDirectory=/home/tim/src/github/bimdev1/media-manager
+Environment="PATH=/home/tim/src/github/bimdev1/media-manager/.venv/bin"
+ExecStart=/home/tim/src/github/bimdev1/media-manager/.venv/bin/python main.py watch --interval 300 --component all
+Restart=always
+RestartSec=60
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=media-manager
+
+[Install]
+WantedBy=multi-user.target
